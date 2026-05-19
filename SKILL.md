@@ -1,9 +1,9 @@
 ---
-name: debug-stack-trace
-description: Use when debugging a bug whose root cause spans a long call chain across multiple files, explaining a branching flow with guards / overrides / early-returns, comparing why one execution path produced a different value or output than another, or when the user asks to "visualize a flow", "trace this bug", "make a stack trace", "draw out the call chain", "walk through the code", or "show how this gets called".
+name: trace-lens
+description: Use when debugging a bug whose root cause spans a long call chain across multiple files, explaining a branching flow with guards / overrides / early-returns, comparing why one execution path produced a different value or output than another, mapping who calls a given function (caller-tree / find-all-references view), or when the user asks to "visualize a flow", "trace this bug", "make a stack trace", "draw out the call chain", "walk through the code", "show how this gets called", or invokes /trace-lens.
 ---
 
-# Debug Stack Trace Visualization
+# TraceLens — stack-trace & caller-tree visualizer
 
 ## When to use
 
@@ -153,6 +153,24 @@ The wrapper is JavaScript so the data file can be loaded via `<script src>` on `
 
 Example: frame #15 is called from `load_payment_details` (#11), called from listener `handle` (#07), called from `dispatch` (#06), called from `log_manual_transfer` (#03), called from the BO endpoint (#00). So `callers: [0, 3, 6, 7, 11]`.
 
+### `fn` — include the parameter list
+
+The `fn` field is the row label, not just the bare method name. **Show parameters in the signature** — a reader scanning the tree should be able to tell at a glance what each call takes, without having to expand the detail pane.
+
+Conventions:
+
+- **Empty parens for nullary methods**: `event_manager::dispatch()` is fine when the method genuinely takes no arguments. Reserve `()` for that case.
+- **Parameter names for ordinary calls**: `log_manual_transfer($transfer_params)`, `load_user_data($user_id)`. Strip language noise (`self::`, `static::`) but keep `$` / `&` / `?` / `...` sigils that carry meaning.
+- **Add types when they clarify**: `confirm(ConfirmRequestDto $dto)`, `handle(CallbackRequestDto $dto)`. For dynamically-typed languages skip types unless the call is overloaded or the type drives behavior.
+- **Truncate long signatures**: if a real signature has 7 parameters, show the first 2–3 plus an ellipsis: `dispatchPaymentEvent($result, $transactionData, ...)`. The full signature still lives in the detail pane's code panel.
+- **Show variadic / by-reference markers**: `handle($params, &$output, &$block_on_failure)` — the `&` flags are important for understanding side effects.
+- **Property-style invocations keep the receiver**: `$event_manager->dispatch('payment_callback', $payload)` rather than just `dispatch(...)`. The receiver names what's being talked to.
+- **Constructors include the class**: `new DepositService($container, $config)` — class name + relevant args.
+
+The fn string ends up in the row's `title` attribute too (so hovering shows the full text even when truncated). Keeping the parameter list there is the easiest way to make the trace self-explanatory at a glance.
+
+Argument *values* belong in the detail pane (the `p` / `pLabel` snapshot), not in `fn`. `fn` shows what the method expects to receive; `p` shows what it actually got in this trace's scenario.
+
 ### Direction: top-down vs bottom-up
 
 The renderer supports two rendering directions, selected by the optional top-level `"direction"` field:
@@ -205,21 +223,65 @@ Typical pattern: trace several distinct entry paths down to a shared handler fra
 
 Every frame has a `kind` (visual category, drives the color) and a `tag` (the pill text). The kind also colors the dot and the row's highlight state.
 
-| kind       | Color     | Use for                                            | Example tags                                        |
-|------------|-----------|----------------------------------------------------|-----------------------------------------------------|
-| `endpoint` | amber     | Entry/exit of the system                            | `ENTRY`, `EXIT`, `PUBLISH`, `RETURN`                |
-| `good`     | teal      | Behavior is correct / expected                      | `WALLET UPDATE`, `WRITE #2`, `OK`, `MATCH`          |
-| `normal`   | grey      | Routine pass-through; nothing notable               | `DISPATCH`, `LISTENER`, `PROFILE`, `DTO BUILD`, `ENTER HANDLER`, `ROW INSERTED`, `FTD FLAG` |
-| `bug`      | red       | Identified bug origin                               | `BUG`, `BUG · WRONG TABLE`, `WRITE #1` (bad write)  |
-| `override` | blue      | Guard / override layer / wrapper logic              | `OVERRIDE LAYER`, `GUARD A`, `GUARD B`, `CALL A`    |
-| `data`     | purple    | Data-dependent step (DB/query/external state)       | `5-JOIN SQL`, `ROOT CAUSE`, `LOOKUP`, `CACHE`       |
-| `branch`   | yellow    | Branching / decision point                          | `DECISION`, `BRANCH`, `IF/ELSE`                     |
-| `publish`  | cyan      | External I/O — send/produce/emit                    | `PUBLISH`, `EMIT`, `WEBHOOK`, `HTTP POST`           |
+Built-in kinds are deliberately narrow — they cover the universal semantic categories that mean the same thing in every codebase. **Anything beyond these is a user-defined custom kind** (see below).
+
+| kind       | Color  | Use for                                       | Example tags                                    |
+|------------|--------|-----------------------------------------------|-------------------------------------------------|
+| `endpoint` | amber  | Entry/exit/target of the system               | `ENTRY`, `EXIT`, `ROUTE`, `ASYNC ENTRY`, `TARGET` |
+| `bug`      | red    | Identified bug origin                         | `BUG`, `BUG · WRONG TABLE`, `WRITE #1`           |
+| `override` | blue   | Guard / override layer / wrapper logic        | `OVERRIDE LAYER`, `GUARD A`, `GUARD B`           |
+| `data`     | purple | Data-dependent step (DB/query/external state) | `5-JOIN SQL`, `ROOT CAUSE`, `LOOKUP`, `CACHE`    |
+| `branch`   | yellow | Branching / decision point                    | `DECISION`, `BRANCH`, `IF/ELSE`, `SWITCH`        |
 
 Rules of thumb:
 - Pick `bug` or `data` for at most 2-3 frames — they should stand out, not blanket the trace.
 - Mark the canonical "root cause" frame with `★ ROOT CAUSE` and pair it with an `extra` block (tables, callouts) explaining the failure modes.
 - Use `branch` for the explicit decision point (the `if ... return false`-style split). Use `override` for the wrapper logic around it.
+
+### Custom kinds — user-defined
+
+The five built-ins are a *floor*, not a ceiling. **Any other string is a valid `kind`.** Use a custom kind whenever your project has a category that genuinely matters in this trace but doesn't fit the built-ins (`io`, `validation`, `cache-hit`, `audit-log`, `success`, `rate-limit`, etc.).
+
+**Default rendering for an undeclared custom kind**: neutral grey dot, neutral grey tag, **no filter chip** (chips are reserved for kinds with a defined color so the chip bar doesn't grow into a wall of grey).
+
+**To give a custom kind a color + chip**, declare it in a top-level `kinds` config:
+
+```js
+window.STACK_TRACE = {
+  ...
+  "kinds": {
+    "io":         { "color": "#6cc3d6", "label": "I/O" },
+    "validation": { "color": "#9cd8a4", "label": "validation" },
+    "audit":      { "color": "#b08bda" }
+  },
+  "frames": [
+    { "n": 5, "kind": "io",         ... },
+    { "n": 8, "kind": "validation", ... },
+  ]
+};
+```
+
+Declared custom kinds appear in the filter-chip bar with their declared color. Their `label` (if set, else the key) shows on the chip.
+
+**When the user has defined their own kind set**, ask the AI to tag frames using *those* kinds rather than improvising new ones. A typical workflow:
+
+1. User says "use kinds: `io`, `validation`, `audit`, `cache-hit`" (and optionally provides colors).
+2. AI declares them in the `kinds` config and applies them to frames as appropriate.
+3. AI sticks to the user's set — does not invent additional kinds unless asked.
+
+If a user names a kind that overlaps with a built-in (e.g. asks for a `decision` kind when `branch` exists), prefer the user's name — they're the owner of the trace's vocabulary.
+
+#### When AI introduces custom kinds
+
+If the user has NOT supplied a kind set and a built-in genuinely doesn't fit, the AI may declare its own custom kinds — **but be strict and concrete**, not verbose:
+
+- **One trace, ≤ 3 custom kinds.** Three new categories is already a lot to read. If you feel pulled toward a fourth, you're probably over-fitting; collapse two of them or fall back to the neutral default.
+- **Concrete, codebase-grounded names.** `io`, `validation`, `cache`, `audit` — not `important-step`, `notable`, `interesting`, `flow-element`. The name should answer "what semantic category is this?" not "is this worth looking at?"
+- **No synonyms of built-ins.** Don't create `entry` (use `endpoint`), `decision` (use `branch`), `error` (use `bug`), `wrapper` (use `override`), `db` (use `data`).
+- **No filler categories.** Resist the urge to add a kind for "pass-through" or "boilerplate" — that's what the neutral default is for.
+- **Declare them.** If you do introduce a kind, write it into `TRACE.kinds` with a colour so it gets a chip and visual signal. An undeclared custom kind that you only set on one frame is wasted vocabulary.
+
+When in doubt, leave `kind` off and let the frame render neutral. Fewer categories with sharper meaning beats more categories with fuzzy meaning.
 
 ## Special tag modifiers
 
@@ -257,6 +319,7 @@ Per modifier:
 | `⚙`   | `config-gated`    | Behavior depends on a config flag / module setting / feature toggle.         |
 | `🔒`   | `tx-boundary`     | Inside a DB transaction or lock scope.                                       |
 | `⋯`   | `unexplored`      | Frame is a *stub*: we know it gets called but did NOT walk into its body. Set `value` to an approx count of inner calls if known (e.g. `"~12"`). |
+| `⎇`   | `conditional`     | This call is one of several possible branches under an `if`, `switch`, polymorphic dispatch, or pattern match — it may or may not fire on any given execution. Set `value` to the short condition (e.g. `"if X"`, `"else"`, `"case 'foo'"`). See "Conditional method calls" below. |
 
 ### Authoring guidance
 
@@ -273,6 +336,73 @@ When adding new modifiers, append rows to the table above and update `renderer/v
 - `⏱` `slow` — known performance hotspot
 - `🧪` `test-only` — code path only reachable under test fixtures
 - `📌` `pinned` — user bookmark / "come back to this"
+
+## Conditional method calls
+
+Most frames in a stack trace are unconditional — they always run when their parent runs. But many real flows have **conditional calls**: a method that fires only under an `if`, `switch`, polymorphic dispatch, pattern match, or feature flag. The reader needs to see at a glance that these calls are *one of several possibilities*, not "this always happens."
+
+**Mark every conditional call with the `conditional` modifier.** Two visual effects:
+
+1. A `⎇` badge appears next to the function name, with the condition text from `value` (e.g. `⎇ if X`, `⎇ else`, `⎇ case 'foo'`).
+2. The tree connector line leading to the frame is **dashed instead of solid**, so even when the badge is off-screen you can scan the lane lines and spot conditional branches.
+
+### Schema
+
+```js
+{
+  "n": 16, "fn": "handle_listener()", ...
+  "special": [
+    { "name": "conditional", "value": "else (sync path)", "title": "fires when $params['async'] is falsy — the common case" }
+  ]
+}
+```
+
+- `value` — short condition snippet (keep it ≤ 25 chars; it sits inline next to the function name).
+- `title` — fuller explanation on hover.
+
+### When the parent is a `branch`
+
+For a frame with `kind: "branch"` that fans out into N alternatives, mark **each alternative child** as `conditional`. The parent frame's role is the decision; the children are the arms.
+
+```
+#14 event_manager::dispatch()     (kind: branch — "if/elseif/else")
+    ├ #15 ⎇ if params['async']   handle_in_background()
+    └ #16 ⎇ else                  handle_listener()
+```
+
+Both #15 and #16 are conditional; they're mutually exclusive on any given execution. The dashed connectors mark them as branching arms rather than sequential calls.
+
+### When the parent is NOT a `branch`
+
+Conditional calls also appear without an explicit `kind: "branch"` parent — e.g. a method body that does:
+
+```php
+$this->load_users_details(...);              // unconditional
+if ($this->is_message_module_available()) {
+    $this->send_user_message(...);           // conditional
+}
+$this->is_first_deposit(...);                // unconditional
+```
+
+Here, only `send_user_message` gets the `conditional` modifier; the other two are unconditional siblings. The parent frame isn't a `branch` (it's a normal method body), but one of its children carries the condition.
+
+### How many branches to show?
+
+There may be **one, two, or many** conditional children under a branching point. Show them all if they're relevant — the dashed connectors and `⎇` badges make the alternatives obvious without inflating the visual weight. If a particular branch is itself non-trivial and you don't want to walk it, combine `conditional` + `unexplored` on the same frame:
+
+```js
+"special": [
+  { "name": "conditional", "value": "if cache_hit", "title": "..." },
+  { "name": "unexplored",  "value": "~6",           "title": "cache-hit path not walked in this trace" }
+]
+```
+
+### Authoring guidance
+
+- Don't mark every line. `conditional` is for *method invocations* that are guarded, not for every `if` inside a frame's body.
+- If a frame's *whole body* runs only under a condition, mark the frame itself as conditional. If only a sub-call inside it is conditional, mark just that sub-call's frame.
+- Combine with `branch` on the deciding parent: `branch` says "this is where the decision happens"; `conditional` on each child says "I'm one arm of that decision."
+- In bottom-up direction, `conditional` is read as "this caller invokes the parent only under condition X" — same semantics, opposite reading direction.
 
 ## Tracking variables across frames
 
@@ -370,7 +500,74 @@ Skip:
 
 ## Trace depth — partial expansion (full vs full-er)
 
-Even the **Full view** is a *curated* trace by default — we list only the frames that matter for the bug. But the reader can lose context if a wide fan-out (e.g. an HTTP endpoint that calls 8 things and we only show 2) is silently hidden. The `unexplored` modifier (`⋯`) is the bridge.
+Even the **Full view** is a *curated* trace by default — we list only the frames that matter for the bug. But the reader can lose context if a wide fan-out (e.g. an HTTP endpoint that calls 8 things and we only show 2) is silently hidden, OR if the trace simply stops at some boundary without saying so. The `unexplored` modifier (`⋯`) is the universal "I didn't open this" marker — see "Boundaries are always marked" below.
+
+### Boundaries are always marked
+
+**Every frame where the trace stops gets `⋯`.** This is the contract with the reader: a frame without `⋯` means "I walked into this and the children below are everything that mattered"; a frame with `⋯` means "there's more inside / above / past here, ask if you want it." Three flavours:
+
+1. **Off-path sibling** — frame we listed for fan-out completeness but didn't recurse into (the original use case).
+2. **Framework boundary** — entry frame whose caller is a known framework (Laravel router, queue worker, Symfony kernel, Express app, Rails ActionDispatch, etc.). We stop at user code; framework internals get `⋯` with `value: "Laravel"` (or whichever framework).
+3. **Depth budget hit** — we walked as far as the default depth allowed and parked here. Same `⋯` glyph; explain "stopped at depth N, ask to dig further" in `desc`.
+
+The badge's `title` attribute should make it clear the user can ask to go further: something like `"Framework internals not traced. Ask if you want them dug into."` or `"Sibling fan-out — not on the bug path. Ask to recurse if needed."`.
+
+In **bottom-up direction**, "boundary" applies in the opposite direction — frames with no further callers (caller-tree leaves) sit at the bottom of the diagram. If those leaves are framework-dispatched (e.g. a Laravel route handler), mark them `⋯` too so the reader sees "the caller above this is Laravel, not traced."
+
+### Known frameworks: don't trace into them
+
+When the trace reaches code that belongs to a recognised framework, **stop and mark with `⋯` (`unexplored`, value = framework name)** — do NOT keep walking unless the user explicitly asks.
+
+Frameworks to stop at by default:
+
+| Ecosystem | Stop at (don't enter) |
+|---|---|
+| Laravel | `Illuminate\\*`, `vendor/laravel/`, Kernel/Router/Middleware pipeline, Queue worker, Eloquent ORM internals, service container resolution |
+| Symfony  | `vendor/symfony/`, HttpKernel, EventDispatcher internals, DI container |
+| Express / Node | `node_modules/express/`, `node_modules/koa/`, the middleware pipeline |
+| Rails | `actionpack/`, `actionview/`, `activerecord/` internals, Rack middleware |
+| Django / Flask | `django/core/handlers/`, `flask/app.py` request lifecycle, WSGI machinery |
+| .NET | `Microsoft.AspNetCore.*`, EF Core internals |
+
+Why: framework code is usually well-documented elsewhere, rarely the cause of bugs, and walking it explodes the trace into dozens of plumbing frames the reader already understands. User code calling INTO the framework is normal trace material; framework code calling out OF the framework into user code (the entry boundary) is where you mark `⋯` and stop.
+
+The user can always say "open the Laravel routing path" or "trace into the queue worker" — at that point, recurse.
+
+**Exceptions** (still trace, even though they live in `vendor/`):
+- Your own published packages or first-party libraries.
+- Custom subclasses / overrides of framework classes when they contain project logic.
+- The exact line in a framework class where a bug demonstrably lives (then walk just enough to show the failure, not the whole framework).
+
+### Queue / job / async boundaries are entry points
+
+Anywhere execution crosses a queue, job, message bus, scheduled task, webhook, signal handler, or similar **asynchronous re-entry point**, treat the consumer side as a fresh entry frame — regardless of language, regardless of whether the queue runs in-process or out. The continuation does not share a call stack with the producer; it's a new invocation triggered later by a worker / scheduler / consumer process.
+
+**On the producer side** (the frame that enqueues the work):
+- Keep its native `kind` (usually `normal` or `publish`).
+- Add `{"name": "async", "value": "→ queue", "title": "enqueues a job that resumes at #N — see Path X"}` to its `special` array.
+- Cross-link in the `desc`: "On failure / completion / event X, this enqueues a job picked up by #N."
+
+**On the consumer side** (the frame the queue worker dispatches into):
+- Set `kind: "endpoint"` — this is a true entry point.
+- Tag it as `ASYNC ENTRY` / `RETRY` / `WORKER` / `CRON` / whatever fits.
+- Add `{"name": "async", "title": "executes on the queue worker / scheduler / consumer, not in the original request"}`.
+- If the framework worker itself is the immediate caller (Laravel Queue, Sidekiq, Celery worker, Kafka consumer, cron daemon), parent it from a separate `⋯` framework-boundary endpoint frame (see "Known frameworks" above).
+- In bottom-up direction, the consumer often funnels back into a shared handler — express that with `convergesTo: <handler_n>` so it renders as an additional caller-tree child of the handler.
+
+Examples that count as async boundaries:
+
+| Mechanism | Producer side | Consumer side |
+|---|---|---|
+| Laravel Job dispatch | `Bus::dispatch(MyJob)` / `dispatch(new MyJob)` | `MyJob::handle()` invoked by queue worker |
+| Sidekiq | `MyWorker.perform_async(args)` | `MyWorker#perform` invoked by Sidekiq worker |
+| Celery | `task.delay(...)` / `task.apply_async(...)` | `@task` body invoked by Celery worker |
+| Kafka / RabbitMQ | `producer.send(...)` / channel publish | consumer / subscriber callback |
+| Cron / scheduler | `Schedule::call(...)` registration | the callable invoked by the scheduler |
+| Webhooks | code that registers / triggers the webhook URL | the inbound handler for that URL |
+| Setlimeout / setInterval | call site | the callback when the timer fires |
+| Promise / Future chained `.then` callback (when run on a different tick) | `.then(cb)` call site | the `cb` invocation later |
+
+When in doubt: if the work resumes in a different execution context (different request, different worker process, different thread, different event-loop tick triggered by external state), it's an async boundary — mark it.
 
 ### Default depth budget
 

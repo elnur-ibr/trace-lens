@@ -40,7 +40,7 @@ body {
   line-height: 1.5;
   padding: 32px 24px 80px;
 }
-.wrap { max-width: 1100px; margin: 0 auto; }
+.wrap { max-width: 90vw; margin: 0 auto; }
 
 header { margin-bottom: 24px; }
 h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
@@ -96,11 +96,16 @@ h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; 
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: visible;
+  /* --fn-col is the width of the function-name column.
+     Default 1fr (flex). The drag handle in .col-head sets it
+     to a pixel value, which applies to .col-head and all .row. */
+  --fn-col: 1fr;
 }
 .row {
   display: grid;
-  grid-template-columns: 28px 40px 1fr auto auto;
+  grid-template-columns: 28px 40px var(--fn-col) 6px auto auto;
   align-items: stretch;
   font-family: var(--mono);
   font-size: 12.5px;
@@ -109,6 +114,55 @@ h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; 
   min-height: 34px;
   transition: background 0.1s;
 }
+
+/* column header — sticky bar above the frames with a drag handle
+   that lets the reader resize the function-name column */
+.col-head {
+  display: grid;
+  grid-template-columns: 28px 40px var(--fn-col) 6px auto auto;
+  align-items: center;
+  background: var(--surface-2);
+  border-bottom: 2px solid var(--border);
+  font-family: var(--font);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 700;
+  min-height: 28px;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  user-select: none;
+}
+.col-head .col-h { padding: 0 10px; white-space: nowrap; }
+.col-resize {
+  cursor: col-resize;
+  position: relative;
+  height: 100%;
+  background: transparent;
+  transition: background 0.15s;
+}
+.col-resize::before {
+  content: "";
+  position: absolute;
+  left: 50%; transform: translateX(-50%);
+  top: 25%; bottom: 25%;
+  width: 2px;
+  background: var(--border);
+  border-radius: 1px;
+}
+.col-resize:hover::before,
+.col-resize.dragging::before {
+  background: var(--accent);
+  top: 0; bottom: 0;
+}
+.col-spacer { /* invisible spacer aligning rows with the col-head resize column */ }
+
+/* while dragging, force col-resize cursor everywhere so the handle
+   doesn't flicker back to text/pointer when the mouse leaves the bar */
+body.col-resizing,
+body.col-resizing * { cursor: col-resize !important; user-select: none; }
 .row:last-of-type { border-bottom: none; }
 .row:hover { background: var(--surface-2); }
 .row.detail-open { background: var(--surface-2); }
@@ -141,13 +195,13 @@ h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; 
 .fn-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 4px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
 .dot.endpoint { background: var(--accent); }
-.dot.good     { background: var(--good); }
 .dot.bug      { background: var(--bad); }
 .dot.override { background: var(--override-c); }
 .dot.data     { background: var(--data); }
-.dot.publish  { background: var(--publish-c); }
 .dot.branch   { background: var(--warn); }
-.dot.normal   { background: var(--muted); }
+/* Any other kind (user-defined custom kinds, or no kind at all) falls
+   back to the muted grey set on .dot above. Declared custom kinds get
+   their own color injected at runtime from TRACE.kinds. */
 
 .fn-name {
   color: var(--text); font-weight: 700; white-space: nowrap;
@@ -175,6 +229,27 @@ h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; 
 .special-badge.external-io   { color: var(--publish-c); }
 .special-badge.config-gated  { color: var(--data); }
 .special-badge.tx-boundary   { color: var(--override-c); }
+.special-badge.conditional   { color: var(--warn); border-color: var(--warn); }
+
+/* When a frame is conditional (one of several branching alternatives),
+   draw its tree connector lines dashed so the reader sees at a glance
+   that this call is one of multiple possibilities, not "always runs". */
+.row[data-conditional="true"] .lane-cell.l::before {
+  background: none;
+  border-left: 1px dashed var(--border);
+  width: 0;
+}
+.row[data-conditional="true"] .lane-cell.l::after,
+.row[data-conditional="true"] .lane-cell.t::after {
+  background: none;
+  border-top: 1px dashed var(--border);
+  height: 0;
+}
+.row[data-conditional="true"] .lane-cell.t::before {
+  background: none;
+  border-left: 1px dashed var(--border);
+  width: 0;
+}
 
 .file { color: var(--muted); font-size: 11px; display: flex; align-items: center; padding: 0 10px; gap: 8px; }
 .file a { color: inherit; text-decoration: none; }
@@ -199,12 +274,11 @@ h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; 
   align-self: center; margin-right: 10px; white-space: nowrap;
 }
 .tag.endpoint { color: var(--accent); }
-.tag.good     { color: var(--good); }
 .tag.bug      { color: var(--bad); }
 .tag.override { color: var(--override-c); }
 .tag.data     { color: var(--data); }
-.tag.publish  { color: var(--publish-c); }
 .tag.branch   { color: var(--warn); }
+/* Tags for unknown / custom kinds inherit the default muted color set above. */
 
 /* detail pane */
 .detail { border-bottom: 1px solid var(--border); background: var(--bg); }
@@ -323,12 +397,11 @@ pre {
 .chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .chip .chip-count { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 2px; }
 .chip.endpoint { color: var(--accent); }
-.chip.good     { color: var(--good); }
 .chip.bug      { color: var(--bad); }
 .chip.override { color: var(--override-c); }
 .chip.data     { color: var(--data); }
-.chip.publish  { color: var(--publish-c); }
 .chip.branch   { color: var(--warn); }
+/* Declared custom kinds get their .chip.<kind> color injected at runtime. */
 .chip.off { opacity: 0.35; text-decoration: line-through; }
 
 /* fatal error / warning overlays */

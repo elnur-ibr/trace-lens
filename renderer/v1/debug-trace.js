@@ -31,8 +31,14 @@ const SPECIAL_GLYPHS = {
   "external-io":    "☁",
   "config-gated":   "⚙",
   "tx-boundary":    "🔒",
-  "unexplored":     "⋯"
+  "unexplored":     "⋯",
+  "conditional":    "⎇"
 };
+
+// Kinds that have a built-in color + filter chip. Custom kinds beyond
+// these can be declared in TRACE.kinds (see "Custom kinds" in SKILL.md);
+// anything else renders neutral grey and gets no chip.
+const BUILTIN_COLORED_KINDS = new Set(["endpoint", "bug", "branch", "data", "override"]);
 
 // ── load trace data ───────────────────────────────────────────
 function showError(msg) {
@@ -117,6 +123,26 @@ function hasSpecial(f, name) {
   return Array.isArray(f && f.special) && f.special.some(s => s.name === name);
 }
 
+// Custom kind declarations from the trace (see "Custom kinds" in SKILL.md).
+// Inject CSS rules so declared kinds get their color on the dot, tag, and chip.
+const CUSTOM_KINDS = (TRACE.kinds && typeof TRACE.kinds === "object") ? TRACE.kinds : {};
+const COLORED_KINDS = new Set([...BUILTIN_COLORED_KINDS, ...Object.keys(CUSTOM_KINDS)]);
+(function injectCustomKindStyles() {
+  const css = [];
+  Object.keys(CUSTOM_KINDS).forEach(k => {
+    const c = (CUSTOM_KINDS[k] && CUSTOM_KINDS[k].color) || null;
+    if (!c) return;
+    // Use [data-kind="x"] / class selectors specific enough to override defaults.
+    css.push(`.dot.${k}, .row[data-kind="${k}"] .dot { background: ${c}; }`);
+    css.push(`.tag.${k} { color: ${c}; }`);
+    css.push(`.chip.${k} { color: ${c}; }`);
+  });
+  if (!css.length) return;
+  const style = document.createElement("style");
+  style.textContent = css.join("\n");
+  document.head.appendChild(style);
+})();
+
 // header
 document.getElementById("title").textContent = TRACE.title || "Stack Trace";
 document.getElementById("subtitle").innerHTML = TRACE.subtitle || "";
@@ -150,11 +176,19 @@ const ctReachable   = new Set();
 
 if (DIRECTION === "bottom-up") {
   FRAMES.forEach(f => { ctChildrenOf[f.n] = []; });
+  // Pass 1 — execution-direct callers. For each frame f, f.callers[last]
+  // is the frame that CALLED f in execution; in caller-tree it becomes
+  // f's CHILD. These render FIRST under each parent (canonical path).
   FRAMES.forEach(f => {
     const directCaller = (f.callers && f.callers.length) ? f.callers[f.callers.length - 1] : -1;
-    if (directCaller !== -1 && ctChildrenOf[directCaller]) {
-      ctChildrenOf[directCaller].push(f.n);
+    if (directCaller !== -1 && ctChildrenOf[f.n] && FRAMES_BY_N[directCaller]) {
+      ctChildrenOf[f.n].push(directCaller);
     }
+  });
+  // Pass 2 — convergesTo callers (fan-in). Appended AFTER direct callers
+  // so the canonical execution path renders first under each parent and
+  // alternative entry points (retry job, sibling controller, etc.) follow.
+  FRAMES.forEach(f => {
     if (typeof f.convergesTo === "number" && ctChildrenOf[f.convergesTo]) {
       ctChildrenOf[f.convergesTo].push(f.n);
     }
@@ -237,6 +271,22 @@ function specialsHtml(f) {
 // ── render rows + detail panes ────────────────────────────────
 const root = document.getElementById("frames");
 root.dataset.direction = DIRECTION;
+
+// Sticky column header — gives the reader a drag handle to resize
+// the function-name column. The 6px slot it lives in is mirrored as
+// .col-spacer in every row so the grid stays aligned.
+const colHead = document.createElement("div");
+colHead.className = "col-head";
+colHead.innerHTML = `
+  <span></span>
+  <span class="col-h">#</span>
+  <span class="col-h">function</span>
+  <span class="col-resize" title="Drag to resize the function-name column"></span>
+  <span class="col-h">location</span>
+  <span class="col-h">tag</span>
+`;
+root.appendChild(colHead);
+
 RENDER_ORDER.forEach(f => {
   const lanes = laneClassesFor(f);
   const hasChildren = (DIRECTION === "bottom-up")
@@ -247,7 +297,8 @@ RENDER_ORDER.forEach(f => {
   const row = document.createElement("div");
   row.className = "row" + (hasChange ? " has-change" : "");
   row.dataset.n    = f.n;
-  row.dataset.kind = f.kind;
+  row.dataset.kind = f.kind || "";
+  if (hasSpecial(f, "conditional")) row.dataset.conditional = "true";
   const ideRefDef = (f.href || "").replace(/#L(\d+)/, ":$1");
   // call-site: explicit calledFromHref if given; else fall back to immediate parent's href
   let callHref = f.calledFromHref || "";
@@ -266,15 +317,17 @@ RENDER_ORDER.forEach(f => {
   const defBtnHtml = showDefBtn
     ? `<button class="copy-btn" title="Copy definition: ${ideRefDef}" data-copy="${ideRefDef}"></button>`
     : "";
+  const fnNameAttr = (f.fn || "").replace(/"/g, "&quot;");
   row.innerHTML = `
     <button class="chev ${hasChildren ? "" : "empty"}" data-n="${f.n}" title="${hasChildren ? "collapse / expand children" : ""}"></button>
     <span class="num">#${String(f.n).padStart(2,"0")}</span>
     <span class="fn-wrap">
       <span class="lanes">${lanes.map(c => `<span class="lane-cell ${c}"></span>`).join("")}</span>
       <span class="dot ${f.kind}"></span>
-      <span class="fn-name">${f.fn}</span>
+      <span class="fn-name" title="${fnNameAttr}">${f.fn}</span>
       ${specialsHtml(f)}
     </span>
+    <span class="col-spacer"></span>
     <span class="file">
       ${callBtnHtml}
       ${defBtnHtml}
@@ -361,17 +414,25 @@ function renderWatchPanel() {
 }
 
 // ── filter chips ──────────────────────────────────────────────
+// Only show chips for kinds with a defined color — built-ins or
+// trace-declared custom kinds (TRACE.kinds). Undeclared custom kinds
+// don't get chips (they render neutral grey in the rows).
 function renderFilterChips() {
   const wrap = document.getElementById("filter-chips");
   const counts = {};
-  FRAMES.forEach(f => { counts[f.kind] = (counts[f.kind] || 0) + 1; });
+  FRAMES.forEach(f => {
+    if (!COLORED_KINDS.has(f.kind)) return;
+    counts[f.kind] = (counts[f.kind] || 0) + 1;
+  });
   const kinds = Object.keys(counts).sort();
   if (!kinds.length) { document.getElementById("filters").classList.add("hidden"); return; }
-  wrap.innerHTML = kinds.map(k => `
-    <button class="chip ${k}" data-kind="${k}" onclick="toggleKind('${k}')">
-      <span class="chip-dot"></span><span>${k}</span><span class="chip-count">${counts[k]}</span>
-    </button>
-  `).join("");
+  wrap.innerHTML = kinds.map(k => {
+    const label = (CUSTOM_KINDS[k] && CUSTOM_KINDS[k].label) || k;
+    return `
+      <button class="chip ${k}" data-kind="${k}" onclick="toggleKind('${k}')">
+        <span class="chip-dot"></span><span>${label}</span><span class="chip-count">${counts[k]}</span>
+      </button>`;
+  }).join("");
 }
 
 // ── state ─────────────────────────────────────────────────────
@@ -481,6 +542,38 @@ function jumpTo(n) {
   const row = document.querySelector(`.row[data-n="${n}"]`);
   if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
 }
+
+// ── column resize drag ────────────────────────────────────────
+// Drag the handle in .col-head to resize the function-name column.
+// We rewrite a CSS variable (--fn-col) on the frames container; both
+// the header and every row reference it via grid-template-columns,
+// so all stay in sync. Min 200px, max 70vw.
+(function wireColResize() {
+  const handle = colHead.querySelector(".col-resize");
+  if (!handle) return;
+  let resizing = null;
+  handle.addEventListener("mousedown", e => {
+    e.preventDefault();
+    const fnWrap = document.querySelector(".frames .row .fn-wrap");
+    const startWidth = fnWrap ? fnWrap.getBoundingClientRect().width : 400;
+    resizing = { startX: e.clientX, startWidth };
+    handle.classList.add("dragging");
+    document.body.classList.add("col-resizing");
+  });
+  document.addEventListener("mousemove", e => {
+    if (!resizing) return;
+    const dx = e.clientX - resizing.startX;
+    const max = window.innerWidth * 0.7;
+    const next = Math.max(200, Math.min(max, resizing.startWidth + dx));
+    root.style.setProperty("--fn-col", next + "px");
+  });
+  document.addEventListener("mouseup", () => {
+    if (!resizing) return;
+    handle.classList.remove("dragging");
+    document.body.classList.remove("col-resizing");
+    resizing = null;
+  });
+})();
 
 // ── jump button binding ───────────────────────────────────────
 if (TRACE.jumpTarget && typeof TRACE.jumpTarget.n === "number") {
