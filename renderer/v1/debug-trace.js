@@ -469,7 +469,10 @@ function toggleKind(k) {
   applyState();
 }
 function jumpTo(n) {
-  (FRAMES_BY_N[n].callers || []).forEach(c => collapsed.delete(c));
+  const chain = (DIRECTION === "bottom-up")
+    ? (ctParentChain[n] || [])
+    : (FRAMES_BY_N[n].callers || []);
+  chain.forEach(c => collapsed.delete(c));
   if (currentView === "short" && !SHORT_PATH.includes(n)) currentView = "full";
   if (hiddenKinds.has(FRAMES_BY_N[n].kind)) hiddenKinds.delete(FRAMES_BY_N[n].kind);
   open.clear();

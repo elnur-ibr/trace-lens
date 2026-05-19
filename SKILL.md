@@ -100,13 +100,15 @@ The renderer is fixed across all traces; the **only file you author per trace** 
 
 ```js
 window.STACK_TRACE = {
-  "schemaVersion": 1,
-  "title":         "<short title shown in the H1>",
-  "subtitle":      "<one-line lede; HTML allowed>",
-  "jumpTarget":    { "n": 15, "label": "root cause" },  // null = hide the button
-  "watch":         [ /* WATCH entries — see "Tracking variables" */ ],
-  "shortPath":     [0, 4, 5, 11, 15, 16, 17, 19],       // [] = hide Full/Short toggle
-  "frames":        [ /* FRAME entries — see below */ ]
+  "schemaVersion":  1,
+  "direction":      "top-down",                         // OPTIONAL: "top-down" (default) | "bottom-up". See "Direction" below.
+  "callerTreeRoot": 19,                                 // OPTIONAL, bottom-up only. Defaults to jumpTarget.n.
+  "title":          "<short title shown in the H1>",
+  "subtitle":       "<one-line lede; HTML allowed>",
+  "jumpTarget":     { "n": 15, "label": "root cause" }, // null = hide the button
+  "watch":          [ /* WATCH entries — see "Tracking variables" */ ],
+  "shortPath":      [0, 4, 5, 11, 15, 16, 17, 19],      // [] = hide Full/Short toggle
+  "frames":         [ /* FRAME entries — see below */ ]
 };
 ```
 
@@ -126,6 +128,7 @@ The wrapper is JavaScript so the data file can be loaded via `<script src>` on `
   "href":    "path/to/file.ext#LNNN",    // clickable link (VS Code/GitHub style) — copied by ⎘ button
   "calledFromHref": "path/to/parent.ext#LNNN", // OPTIONAL: the exact line in the caller where this frame is invoked — copied by ↩ button. If omitted, the ↩ button falls back to the immediate parent frame's href.
   "callers": [0, 3, 6, 7, 11],           // FULL ancestor chain root → parent (empty array = root)
+  "convergesTo": 14,                     // OPTIONAL: declares fan-in. In bottom-up direction, this frame becomes an additional caller-tree child of frame #14 (in addition to its execution caller). Used when several call sites funnel into a shared handler (e.g. multiple dispatch points → one event-manager). See "Direction" below.
   "desc":    "1-3 sentence description; HTML allowed.",
   "code":    "<span class=\"key\">…</span>",      // syntax-highlighted code
   "pLabel":  "$params",                  // header for the right detail panel
@@ -149,6 +152,32 @@ The wrapper is JavaScript so the data file can be loaded via `<script src>` on `
 - Tree connector line computation (which lanes get `│` vs blank)
 
 Example: frame #15 is called from `load_payment_details` (#11), called from listener `handle` (#07), called from `dispatch` (#06), called from `log_manual_transfer` (#03), called from the BO endpoint (#00). So `callers: [0, 3, 6, 7, 11]`.
+
+### Direction: top-down vs bottom-up
+
+The renderer supports two rendering directions, selected by the optional top-level `"direction"` field:
+
+| Direction | Default | When to use |
+|-----------|---------|-------------|
+| `"top-down"` | yes | Execution-flow narratives: entry frame at the top, target at the bottom. Reads left-to-right like a stack trace going inward — "the request came in here, then this fired, then this, ..." Used for bug investigations where the flow is the story. |
+| `"bottom-up"` | no | Caller-tree / "who calls X" investigations: target frame at the top with `callers.length = 0` visually, frames that call it cascade below at deeper indentation. Reads like an IDE's "Find All References" or "Call Hierarchy" view. |
+
+#### Bottom-up semantics
+
+In bottom-up mode the renderer:
+
+1. Picks a **caller-tree root** from `callerTreeRoot` (preferred), then `jumpTarget.n`, then the last frame in `frames[]`.
+2. Builds an **inverted tree**: for each frame `F`, its caller-tree children are (a) frames whose immediate execution-caller is `F` — i.e., frames `G` where `G.callers[last] === F.n` — plus (b) any frame with `convergesTo === F.n` (see below).
+3. Walks the tree DFS from the root and renders frames in that order. **Frames not reachable from the caller-tree root are not rendered** — only the call paths that lead to the target appear. Use top-down mode when the surrounding context matters.
+4. The `└` / `├` glyphs are unchanged — children render below their parent, more indented, in both directions. The difference is which frame is the "parent."
+
+#### Fan-in with `convergesTo`
+
+A frame's `callers[]` chain only describes **one** execution path. Real systems often have multiple call sites converging on the same handler (e.g. three different dispatch points → one `event_manager::dispatch`). In bottom-up mode, the renderer needs to know about those extra inbound edges to draw them as siblings under the convergence point.
+
+Set `"convergesTo": <n>` on each leaf frame whose execution path ends by entering frame `#n`. In bottom-up mode, that frame becomes an additional caller-tree child of `#n`. In top-down mode `convergesTo` is purely informational — the detail pane shows a "converges into: #N <fn>" note below the "called by:" breadcrumb, but the rendering is unchanged.
+
+Typical pattern: trace several distinct entry paths down to a shared handler frame, give that handler one canonical execution chain, then `convergesTo` from each *other* path's leaf back into the handler. The bottom-up view then renders the handler with all three paths fanning out below it.
 
 ### JSON authoring rules
 
