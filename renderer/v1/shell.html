@@ -1,0 +1,67 @@
+<!--
+  ============================================================
+  debug-stack-trace · shell template (renderer v1)
+  ------------------------------------------------------------
+  Per-trace HTML shell. Copied into TraceLens/<feature>/index.html
+  Placeholders to fill on copy:
+    {{TITLE}}        — short title for the <title> tag
+    {{RENDERER_REL}} — relative path to the renderer folder
+                       (typically "../_renderer/v1")
+    {{DATA_REL}}     — relative path to the data file
+                       (typically "./trace.data.js")
+  ============================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{TITLE}}</title>
+<link rel="stylesheet" href="{{RENDERER_REL}}/debug-trace.css">
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <h1 id="title">Stack Trace</h1>
+    <p class="sub" id="subtitle"></p>
+  </header>
+
+  <div class="watch hidden" id="watch-panel">
+    <div class="watch-title">Watch</div>
+    <div id="watch-body"></div>
+  </div>
+
+  <div class="ctrl">
+    <strong>Stack tree</strong>
+    <button onclick="setSubtree(false)">Expand all</button>
+    <button onclick="setSubtree(true)">Collapse all</button>
+    <span class="divider"></span>
+    <strong>Details</strong>
+    <button onclick="setDetails(true)">Open all</button>
+    <button onclick="setDetails(false)">Close all</button>
+    <span class="divider"></span>
+    <strong>View</strong>
+    <div class="view-toggle hidden" id="view-toggle">
+      <button data-view="full" class="active" onclick="setView('full')">Full</button>
+      <button data-view="short" onclick="setView('short')">Short</button>
+    </div>
+    <span class="divider"></span>
+    <button id="jump-btn" style="display:none">Jump</button>
+  </div>
+
+  <div class="filters" id="filters">
+    <span class="filters-label">Filter by kind</span>
+    <div id="filter-chips" style="display:contents"></div>
+  </div>
+
+  <div class="frames" id="frames"></div>
+
+</div>
+
+<!-- trace data must load BEFORE renderer -->
+<script src="{{DATA_REL}}"></script>
+<script src="{{RENDERER_REL}}/debug-trace.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,737 @@
+<!--
+  ============================================================
+  debug-stack-trace · template.html
+  ------------------------------------------------------------
+  Architecture
+    • The CSS + JS BELOW the data block is the renderer. Do NOT edit
+      unless changing theme/behavior across all traces.
+    • The <script type="application/json" id="trace-data"> block AT
+      THE BOTTOM is the only thing you change per trace.
+    • Copy this file to <feature>_trace.html, replace the JSON block,
+      open in a browser.
+
+  Schema reference: see SKILL.md "Trace JSON schema".
+  ============================================================
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stack Trace</title>
+<style>
+  :root {
+    --bg:        #0d1117;
+    --surface:   #161b22;
+    --surface-2: #1f242d;
+    --border:    #30363d;
+    --text:      #e6edf3;
+    --text-dim:  #b1bac4;
+    --muted:     #7d8590;
+    --accent:    #e6b34a;
+    --good:      #5fbfa5;
+    --bad:       #e57373;
+    --warn:      #e3a854;
+    --data:      #b08bda;
+    --override-c:#7ba8e0;
+    --publish-c: #6cc3d6;
+    --code-bg:   #0a0e14;
+    --code-key:  #e6b34a;
+    --code-str:  #9cd8a4;
+    --code-num:  #e57373;
+    --code-com:  #6e7681;
+    --code-fn:   #7ba8e0;
+
+    --font: Tahoma, "Lucida Sans Unicode", Verdana, sans-serif;
+    --mono: Consolas, "Lucida Console", "Courier New", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    line-height: 1.5;
+    padding: 32px 24px 80px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  header { margin-bottom: 24px; }
+  h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+  .sub { font-size: 13px; color: var(--muted); }
+  .sub code {
+    font-family: var(--mono); color: var(--accent);
+    background: var(--surface-2); padding: 1px 5px; border-radius: 2px;
+  }
+
+  /* WATCH panel */
+  .watch {
+    margin: 16px 0 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 18px;
+  }
+  .watch.hidden { display: none; }
+  .watch-title {
+    color: var(--accent); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 700; margin-bottom: 12px;
+  }
+  .watch-var {
+    display: grid; grid-template-columns: 220px 1fr; gap: 14px;
+    align-items: start; margin-bottom: 12px;
+  }
+  .watch-var:last-child { margin-bottom: 0; }
+  @media (max-width: 760px) { .watch-var { grid-template-columns: 1fr; } }
+  .watch-var-label {
+    font-family: var(--mono); font-size: 12px; color: var(--text);
+    font-weight: 700; padding-top: 4px;
+  }
+  .watch-var-label .initial {
+    color: var(--muted); font-weight: 400; display: block; font-size: 11px;
+  }
+  .watch-timeline { display: flex; flex-wrap: wrap; gap: 6px; }
+  .watch-step {
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: 3px 8px; border-radius: 3px; cursor: pointer;
+    font-family: var(--mono); font-size: 11.5px; color: var(--text);
+    user-select: none;
+  }
+  .watch-step:hover { border-color: var(--accent); }
+  .watch-step .stepn { color: var(--muted); margin-right: 6px; }
+  .watch-step .arrow { color: var(--muted); margin: 0 4px; }
+  .watch-step.bad  .stepv { color: var(--bad);  background: rgba(229,115,115,.16); padding: 0 3px; border-radius: 2px; }
+  .watch-step.good .stepv { color: var(--good); background: rgba(95,191,165,.16); padding: 0 3px; border-radius: 2px; }
+  .watch-step .note { color: var(--muted); margin-left: 8px; font-style: italic; font-size: 11px; }
+
+  /* frames */
+  .frames {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 28px 40px 1fr auto auto;
+    align-items: stretch;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    min-height: 34px;
+    transition: background 0.1s;
+  }
+  .row:last-of-type { border-bottom: none; }
+  .row:hover { background: var(--surface-2); }
+  .row.detail-open { background: var(--surface-2); }
+  .row.hidden { display: none; }
+  .row.has-change .fn-name::after {
+    content: "●"; color: var(--warn); margin-left: 8px;
+    font-size: 9px; vertical-align: middle;
+  }
+
+  .chev {
+    background: transparent; border: none; color: var(--muted);
+    font-family: var(--mono); font-size: 10px; cursor: pointer;
+    padding: 0; width: 28px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .chev:hover { color: var(--accent); }
+  .chev.empty { cursor: default; visibility: hidden; }
+  .chev::before { content: "▾"; }
+  .row.subtree-collapsed .chev::before { content: "▸"; }
+
+  .lanes { display: flex; align-items: stretch; padding-left: 4px; }
+  .lane-cell { width: 22px; position: relative; flex-shrink: 0; }
+  .lane-cell.v::before { content:""; position:absolute; left:10px; top:0; bottom:0; width:1px; background:var(--border); }
+  .lane-cell.t::before { content:""; position:absolute; left:10px; top:0; bottom:0; width:1px; background:var(--border); }
+  .lane-cell.t::after  { content:""; position:absolute; left:10px; top:50%; height:1px; width:12px; background:var(--border); }
+  .lane-cell.l::before { content:""; position:absolute; left:10px; top:0; height:50%; width:1px; background:var(--border); }
+  .lane-cell.l::after  { content:""; position:absolute; left:10px; top:50%; height:1px; width:12px; background:var(--border); }
+
+  .num { color: var(--muted); font-size: 11px; display: flex; align-items: center; padding: 0 6px 0 4px; }
+  .fn-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 4px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .dot.endpoint { background: var(--accent); }
+  .dot.good     { background: var(--good); }
+  .dot.bug      { background: var(--bad); }
+  .dot.override { background: var(--override-c); }
+  .dot.data     { background: var(--data); }
+  .dot.publish  { background: var(--publish-c); }
+  .dot.branch   { background: var(--warn); }
+  .dot.normal   { background: var(--muted); }
+
+  .fn-name {
+    color: var(--text); font-weight: 700; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .row.detail-open .fn-name { color: var(--accent); }
+
+  /* special-tag badges */
+  .specials { display: inline-flex; gap: 4px; margin-left: 6px; }
+  .special-badge {
+    display: inline-flex; align-items: center; gap: 2px;
+    padding: 1px 5px; border-radius: 3px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text-dim); font-family: var(--mono); font-size: 10.5px;
+    user-select: none;
+  }
+  .special-badge[title] { cursor: help; }
+  .special-badge.duplicate     { color: var(--accent); border-color: var(--accent); }
+  .special-badge.root-cause    { color: var(--bad); border-color: var(--bad); }
+  .special-badge.early-return  { color: var(--muted); }
+  .special-badge.async         { color: var(--publish-c); }
+  .special-badge.mutates-shared{ color: var(--warn); }
+  .special-badge.throws        { color: var(--bad); }
+  .special-badge.hypothetical  { color: var(--muted); font-style: italic; }
+  .special-badge.external-io   { color: var(--publish-c); }
+  .special-badge.config-gated  { color: var(--data); }
+  .special-badge.tx-boundary   { color: var(--override-c); }
+
+  .file { color: var(--muted); font-size: 11px; display: flex; align-items: center; padding: 0 10px; gap: 8px; }
+  .file a { color: inherit; text-decoration: none; }
+  .file a:hover { color: var(--accent); text-decoration: underline; }
+
+  .copy-btn {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-family: var(--mono); font-size: 11px; cursor: pointer;
+    padding: 0 6px; height: 18px; border-radius: 2px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .copy-btn::before { content: "⎘"; }
+  .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .copy-btn.copied { color: var(--good); border-color: var(--good); }
+  .copy-btn.copied::before { content: "✓"; }
+
+  .tag {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 2px 7px; border: 1px solid currentColor; border-radius: 2px;
+    font-weight: 700; color: var(--muted); font-family: var(--font);
+    align-self: center; margin-right: 10px; white-space: nowrap;
+  }
+  .tag.endpoint { color: var(--accent); }
+  .tag.good     { color: var(--good); }
+  .tag.bug      { color: var(--bad); }
+  .tag.override { color: var(--override-c); }
+  .tag.data     { color: var(--data); }
+  .tag.publish  { color: var(--publish-c); }
+  .tag.branch   { color: var(--warn); }
+
+  /* detail pane */
+  .detail { border-bottom: 1px solid var(--border); background: var(--bg); }
+  .detail.hidden { display: none; }
+  .detail-inner { padding: 14px 18px 18px; font-family: var(--font); }
+  .detail-inner .called-by { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 10px; }
+  .detail-inner .called-by .me { color: var(--accent); font-weight: 700; }
+  .detail-inner p { color: var(--text-dim); margin-bottom: 12px; max-width: 800px; }
+  .detail-inner p code, .detail-inner strong code {
+    font-family: var(--mono); background: var(--code-bg); color: var(--accent);
+    padding: 1px 5px; border-radius: 2px; font-size: 12px;
+  }
+  .detail-inner strong { color: var(--text); }
+
+  .changes-block {
+    margin: 0 0 14px; padding: 10px 14px;
+    background: var(--surface-2); border-left: 3px solid var(--warn);
+    border-radius: 0 4px 4px 0;
+  }
+  .changes-title {
+    color: var(--warn); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 700; margin-bottom: 6px;
+  }
+  .change-row {
+    font-family: var(--mono); font-size: 12px; padding: 2px 0;
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px;
+  }
+  .change-row .var { color: var(--text); font-weight: 700; }
+  .change-row .arrow { color: var(--muted); }
+  .change-row .val { color: var(--accent); }
+  .change-row .val.bad  { color: var(--bad); background: rgba(229,115,115,.16); padding: 0 4px; border-radius: 2px; }
+  .change-row .val.good { color: var(--good); background: rgba(95,191,165,.16); padding: 0 4px; border-radius: 2px; }
+  .change-row .note { color: var(--muted); font-style: italic; font-family: var(--font); font-size: 12px; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid var(--border); border-radius: 3px; background: var(--code-bg); overflow: hidden; }
+  .panel-head {
+    padding: 6px 10px; background: var(--surface); border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.08em; color: var(--muted); font-weight: 700;
+  }
+  pre {
+    margin: 0; padding: 10px 12px; font-family: var(--mono); font-size: 11.5px;
+    line-height: 1.55; overflow-x: auto; color: var(--text);
+    max-height: 420px; overflow-y: auto;
+  }
+  .com   { color: var(--code-com); }
+  .key   { color: var(--code-key); }
+  .str   { color: var(--code-str); }
+  .num-c { color: var(--code-num); }
+  .fn-c  { color: var(--code-fn); }
+  .bad-val  { background: rgba(229,115,115,.16); padding: 0 3px; }
+  .good-val { background: rgba(95,191,165,.16); padding: 0 3px; }
+
+  /* extras inside detail */
+  .join { width:100%; border-collapse:collapse; margin:8px 0 14px; font-size:12px; font-family:var(--mono); }
+  .join th, .join td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--border); }
+  .join th { color:var(--muted); font-size:10px; text-transform:uppercase; background:var(--code-bg); }
+  .join td.tbl { color: var(--accent); }
+  .join .risk-low  { color: var(--good); }
+  .join .risk-med  { color: var(--warn); }
+  .join .risk-high { color: var(--bad); font-weight: 700; }
+  .callout { margin:8px 0 14px; padding:10px 14px; border-left:3px solid var(--data); background:rgba(176,139,218,0.08); color:var(--text-dim); font-family:var(--font); font-size:13px; }
+  .callout b { color:var(--data); display:block; margin-bottom:4px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  .callout code { font-family:var(--mono); color:var(--data); }
+
+  /* control bar */
+  .ctrl {
+    display: flex; align-items: center; gap: 8px;
+    margin: 16px 0 0; flex-wrap: wrap;
+  }
+  .ctrl strong {
+    color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 700;
+  }
+  .ctrl button {
+    font-family: var(--font); font-size: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text-dim); padding: 5px 10px; border-radius: 3px; cursor: pointer;
+  }
+  .ctrl button:hover { color: var(--text); border-color: var(--muted); }
+  .ctrl .divider { width: 1px; height: 18px; background: var(--border); margin: 0 4px; }
+
+  .view-toggle {
+    display: inline-flex; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 3px; padding: 2px;
+  }
+  .view-toggle.hidden { display: none; }
+  .view-toggle button {
+    background: transparent; border: none; color: var(--muted);
+    font-family: var(--font); font-size: 12px; padding: 3px 12px;
+    border-radius: 2px; cursor: pointer;
+  }
+  .view-toggle button.active { background: var(--surface-2); color: var(--accent); font-weight: 700; }
+  .view-toggle button:hover:not(.active) { color: var(--text); }
+
+  .filters {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin: 10px 0 0; padding: 8px 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; font-size: 11px;
+  }
+  .filters.hidden { display: none; }
+  .filters-label {
+    color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.08em; font-weight: 700; margin-right: 6px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 8px 3px 6px; border: 1px solid currentColor;
+    border-radius: 3px; cursor: pointer; user-select: none;
+    font-family: var(--font); font-size: 11px; color: var(--muted);
+    background: transparent; transition: opacity 0.15s;
+  }
+  .chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .chip .chip-count { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 2px; }
+  .chip.endpoint { color: var(--accent); }
+  .chip.good     { color: var(--good); }
+  .chip.bug      { color: var(--bad); }
+  .chip.override { color: var(--override-c); }
+  .chip.data     { color: var(--data); }
+  .chip.publish  { color: var(--publish-c); }
+  .chip.branch   { color: var(--warn); }
+  .chip.off { opacity: 0.35; text-decoration: line-through; }
+
+  /* fatal error overlay */
+  .err {
+    margin-top: 20px; padding: 14px 18px;
+    background: rgba(229,115,115,0.08); border: 1px solid var(--bad);
+    border-left: 4px solid var(--bad); border-radius: 4px;
+    color: var(--bad); font-family: var(--mono); font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header>
+    <h1 id="title">Stack Trace</h1>
+    <p class="sub" id="subtitle"></p>
+  </header>
+
+  <div class="watch hidden" id="watch-panel">
+    <div class="watch-title">Watch</div>
+    <div id="watch-body"></div>
+  </div>
+
+  <div class="ctrl">
+    <strong>Stack tree</strong>
+    <button onclick="setSubtree(false)">Expand all</button>
+    <button onclick="setSubtree(true)">Collapse all</button>
+    <span class="divider"></span>
+    <strong>Details</strong>
+    <button onclick="setDetails(true)">Open all</button>
+    <button onclick="setDetails(false)">Close all</button>
+    <span class="divider"></span>
+    <strong>View</strong>
+    <div class="view-toggle hidden" id="view-toggle">
+      <button data-view="full" class="active" onclick="setView('full')">Full</button>
+      <button data-view="short" onclick="setView('short')">Short</button>
+    </div>
+    <span class="divider"></span>
+    <button id="jump-btn" style="display:none">Jump</button>
+  </div>
+
+  <div class="filters" id="filters">
+    <span class="filters-label">Filter by kind</span>
+    <div id="filter-chips" style="display:contents"></div>
+  </div>
+
+  <div class="frames" id="frames"></div>
+
+</div>
+
+<!-- ============================================================
+  TRACE DATA — the only thing to edit per debug session.
+  Schema: see SKILL.md "Trace JSON schema".
+  Tip: when authoring, escape multi-line code with \n inside
+  the JSON string. The browser will render &lt;span&gt;…&lt;/span&gt;
+  highlighting spans as real HTML.
+============================================================ -->
+<script type="application/json" id="trace-data">
+{
+  "title": "Stack Trace",
+  "subtitle": "Replace the JSON block at the bottom of this file with your trace data.",
+  "jumpTarget": null,
+  "watch": [],
+  "shortPath": [],
+  "frames": [
+    {
+      "n": 0,
+      "fn": "entry_point()",
+      "kind": "endpoint",
+      "tag": "ENTRY",
+      "file": "src/path/file.ext:1",
+      "href": "src/path/file.ext#L1",
+      "callers": [],
+      "desc": "Top of the call chain. Replace with the real entry description.",
+      "code": "<span class=\"com\">// code at this frame</span>\n<span class=\"key\">function</span> <span class=\"fn-c\">entry_point</span>() { ... }",
+      "pLabel": "input",
+      "p": "<span class=\"com\">// state at this point</span>\n{}"
+    }
+  ]
+}
+</script>
+
+<script>
+/* ============================================================
+   RENDERER — fixed, do not edit unless changing theme/behavior
+   ============================================================ */
+
+// glyph map for special-tag modifiers (extend here)
+const SPECIAL_GLYPHS = {
+  "duplicate":      "↻",
+  "root-cause":     "★",
+  "early-return":   "↗",
+  "async":          "⚡",
+  "mutates-shared": "Δ",
+  "throws":         "☓",
+  "hypothetical":   "?",
+  "external-io":    "☁",
+  "config-gated":   "⚙",
+  "tx-boundary":    "🔒",
+  "unexplored":     "⋯"
+};
+
+// ── load JSON data ─────────────────────────────────────────────
+let TRACE;
+try {
+  const raw = document.getElementById("trace-data").textContent.trim();
+  TRACE = JSON.parse(raw);
+} catch (e) {
+  document.querySelector(".wrap").insertAdjacentHTML(
+    "beforeend",
+    `<div class="err">Failed to parse trace JSON: ${e.message}</div>`
+  );
+  throw e;
+}
+
+const FRAMES     = Array.isArray(TRACE.frames)    ? TRACE.frames    : [];
+const WATCH      = Array.isArray(TRACE.watch)     ? TRACE.watch     : [];
+const SHORT_PATH = Array.isArray(TRACE.shortPath) ? TRACE.shortPath : [];
+
+// header
+document.getElementById("title").textContent = TRACE.title || "Stack Trace";
+document.getElementById("subtitle").innerHTML = TRACE.subtitle || "";
+
+// jump button
+if (TRACE.jumpTarget && typeof TRACE.jumpTarget.n === "number") {
+  const btn = document.getElementById("jump-btn");
+  btn.textContent = `Jump to #${String(TRACE.jumpTarget.n).padStart(2,"0")} (${TRACE.jumpTarget.label || "target"})`;
+  btn.style.display = "";
+}
+
+// ── tree maps ──────────────────────────────────────────────────
+const parentOf = {};
+const childrenOf = {};
+FRAMES.forEach(f => {
+  parentOf[f.n]   = (f.callers && f.callers.length) ? f.callers[f.callers.length - 1] : -1;
+  childrenOf[f.n] = [];
+});
+FRAMES.forEach(f => {
+  if (parentOf[f.n] !== -1) childrenOf[parentOf[f.n]].push(f.n);
+});
+
+function laneClassesFor(f) {
+  const callers = f.callers || [];
+  const D = callers.length;
+  const out = [];
+  for (let i = 0; i < D; i++) {
+    const ancestorIdx = callers[i];
+    const branchIdx   = (i < D - 1) ? callers[i + 1] : f.n;
+    const siblings    = childrenOf[ancestorIdx] || [];
+    const isLast      = siblings[siblings.length - 1] === branchIdx;
+    if (i === D - 1) out.push(isLast ? "l" : "t");
+    else              out.push(isLast ? "e" : "v");
+  }
+  return out;
+}
+
+function specialsHtml(f) {
+  if (!Array.isArray(f.special) || !f.special.length) return "";
+  return `<span class="specials">${f.special.map(s => {
+    const glyph = SPECIAL_GLYPHS[s.name] || "•";
+    const title = s.title ? ` title="${s.title.replace(/"/g, "&quot;")}"` : "";
+    const val   = s.value ? `<span>${s.value}</span>` : "";
+    return `<span class="special-badge ${s.name}"${title}>${glyph}${val}</span>`;
+  }).join("")}</span>`;
+}
+
+// ── render rows + detail panes ────────────────────────────────
+const root = document.getElementById("frames");
+FRAMES.forEach(f => {
+  const lanes = laneClassesFor(f);
+  const hasChildren = (childrenOf[f.n] || []).length > 0;
+  const hasChange   = Array.isArray(f.changes) && f.changes.length > 0;
+
+  const row = document.createElement("div");
+  row.className = "row" + (hasChange ? " has-change" : "");
+  row.dataset.n    = f.n;
+  row.dataset.kind = f.kind;
+  const ideRef = (f.href || "").replace(/#L(\d+)/, ":$1");
+  row.innerHTML = `
+    <button class="chev ${hasChildren ? "" : "empty"}" data-n="${f.n}" title="${hasChildren ? "collapse / expand children" : ""}"></button>
+    <span class="num">#${String(f.n).padStart(2,"0")}</span>
+    <span class="fn-wrap">
+      <span class="lanes">${lanes.map(c => `<span class="lane-cell ${c}"></span>`).join("")}</span>
+      <span class="dot ${f.kind}"></span>
+      <span class="fn-name">${f.fn}</span>
+      ${specialsHtml(f)}
+    </span>
+    <span class="file">
+      <button class="copy-btn" title="Copy ${ideRef}" data-copy="${ideRef}"></button>
+      <a href="${f.href || "#"}" onclick="event.stopPropagation()">${f.file || ""}</a>
+    </span>
+    <span class="tag ${f.kind}">${f.tag || ""}</span>
+  `;
+  root.appendChild(row);
+
+  const trail = [...(f.callers || []), f.n]
+    .map(i => i === f.n
+      ? `<span class="me">#${String(i).padStart(2,"0")} ${FRAMES[i].fn}</span>`
+      : `#${String(i).padStart(2,"0")} ${FRAMES[i].fn}`
+    ).join(" → ");
+
+  const changesHtml = hasChange
+    ? `<div class="changes-block">
+         <div class="changes-title">Changes at this frame</div>
+         ${f.changes.map(c => `
+           <div class="change-row">
+             <span class="var">${c.var}</span>
+             <span class="arrow">→</span>
+             <span class="val ${c.kind || ""}">${c.value}</span>
+             ${c.note ? `<span class="note">${c.note}</span>` : ""}
+           </div>`).join("")}
+       </div>`
+    : "";
+
+  const detail = document.createElement("div");
+  detail.className = "detail hidden";
+  detail.dataset.n = f.n;
+  detail.innerHTML = `
+    <div class="detail-inner">
+      <div class="called-by">called by: ${trail}</div>
+      ${changesHtml}
+      <p>${f.desc || ""}</p>
+      ${f.extra || ""}
+      <div class="grid">
+        <div class="panel"><div class="panel-head">code</div><pre>${f.code || ""}</pre></div>
+        <div class="panel"><div class="panel-head">${f.pLabel || "$params"}</div><pre>${f.p || ""}</pre></div>
+      </div>
+    </div>
+  `;
+  root.appendChild(detail);
+});
+
+// ── WATCH panel render ────────────────────────────────────────
+function renderWatchPanel() {
+  if (!WATCH.length) return;
+  const panel = document.getElementById("watch-panel");
+  const body  = document.getElementById("watch-body");
+  panel.classList.remove("hidden");
+  body.innerHTML = "";
+  WATCH.forEach(w => {
+    const steps = [];
+    FRAMES.forEach(f => {
+      if (!Array.isArray(f.changes)) return;
+      f.changes.forEach(c => { if (c.var === w.name) steps.push({ n: f.n, ...c }); });
+    });
+    const stepsHtml = steps.map(s => `
+      <span class="watch-step ${s.kind || ""}" onclick="jumpTo(${s.n})">
+        <span class="stepn">#${String(s.n).padStart(2,"0")}</span>
+        <span class="arrow">→</span>
+        <span class="stepv">${s.value}</span>
+        ${s.note ? `<span class="note">${s.note}</span>` : ""}
+      </span>
+    `).join("");
+    const row = document.createElement("div");
+    row.className = "watch-var";
+    row.innerHTML = `
+      <div class="watch-var-label">
+        ${w.label || w.name}
+        <span class="initial">initial: ${w.initial || "(unset)"}</span>
+      </div>
+      <div class="watch-timeline">${stepsHtml || `<span class="watch-step" style="cursor:default"><span class="stepv">${w.initial || "(no changes)"}</span></span>`}</div>
+    `;
+    body.appendChild(row);
+  });
+}
+
+// ── filter chips ──────────────────────────────────────────────
+function renderFilterChips() {
+  const wrap = document.getElementById("filter-chips");
+  const counts = {};
+  FRAMES.forEach(f => { counts[f.kind] = (counts[f.kind] || 0) + 1; });
+  const kinds = Object.keys(counts).sort();
+  if (!kinds.length) { document.getElementById("filters").classList.add("hidden"); return; }
+  wrap.innerHTML = kinds.map(k => `
+    <button class="chip ${k}" data-kind="${k}" onclick="toggleKind('${k}')">
+      <span class="chip-dot"></span><span>${k}</span><span class="chip-count">${counts[k]}</span>
+    </button>
+  `).join("");
+}
+
+// ── state ─────────────────────────────────────────────────────
+const collapsed   = new Set();
+const open        = new Set();
+const hiddenKinds = new Set();
+let currentView   = "full";
+
+function inCurrentView(n) {
+  return currentView !== "short" || SHORT_PATH.includes(n);
+}
+function isHiddenByAncestor(n) {
+  return (FRAMES[n].callers || []).some(c => collapsed.has(c));
+}
+
+function applyState() {
+  document.querySelectorAll(".row").forEach(row => {
+    const n    = +row.dataset.n;
+    const kind = row.dataset.kind;
+    let hidden = false;
+    if (!inCurrentView(n))                                 hidden = true;
+    if (isHiddenByAncestor(n))                             hidden = true;
+    if (currentView === "full" && hiddenKinds.has(kind))   hidden = true;
+    row.classList.toggle("hidden", hidden);
+    row.classList.toggle("subtree-collapsed", collapsed.has(n));
+    row.classList.toggle("detail-open", open.has(n) && !hidden);
+  });
+  document.querySelectorAll(".detail").forEach(d => {
+    const n     = +d.dataset.n;
+    const kind  = FRAMES[n].kind;
+    let hidden  = !open.has(n);
+    if (!inCurrentView(n))                                 hidden = true;
+    if (isHiddenByAncestor(n))                             hidden = true;
+    if (currentView === "full" && hiddenKinds.has(kind))   hidden = true;
+    d.classList.toggle("hidden", hidden);
+  });
+  document.getElementById("filters").classList.toggle("hidden", currentView === "short");
+  document.querySelectorAll("#view-toggle button").forEach(b => {
+    b.classList.toggle("active", b.dataset.view === currentView);
+  });
+  document.querySelectorAll(".chip").forEach(c => {
+    c.classList.toggle("off", hiddenKinds.has(c.dataset.kind));
+  });
+}
+
+// ── events ────────────────────────────────────────────────────
+document.querySelectorAll(".chev").forEach(c => {
+  c.addEventListener("click", e => {
+    e.stopPropagation();
+    const n = +c.dataset.n;
+    if (collapsed.has(n)) collapsed.delete(n); else collapsed.add(n);
+    applyState();
+  });
+});
+document.addEventListener("click", e => {
+  const btn = e.target.closest(".copy-btn");
+  if (!btn) return;
+  e.stopPropagation();
+  navigator.clipboard.writeText(btn.dataset.copy || "");
+  btn.classList.add("copied");
+  setTimeout(() => btn.classList.remove("copied"), 900);
+});
+document.querySelectorAll(".row").forEach(row => {
+  row.addEventListener("click", e => {
+    if (e.target.closest(".chev") || e.target.closest("a") || e.target.closest(".copy-btn")) return;
+    const n = +row.dataset.n;
+    if (open.has(n)) open.delete(n); else open.add(n);
+    applyState();
+  });
+});
+
+// ── control actions (also referenced from inline onclicks) ────
+function setSubtree(collapseAll) {
+  collapsed.clear();
+  if (collapseAll) FRAMES.forEach(f => { if ((childrenOf[f.n] || []).length) collapsed.add(f.n); });
+  applyState();
+}
+function setDetails(openAll) {
+  open.clear();
+  if (openAll) FRAMES.forEach(f => open.add(f.n));
+  applyState();
+}
+function setView(mode) { currentView = mode; applyState(); }
+function toggleKind(k) {
+  if (hiddenKinds.has(k)) hiddenKinds.delete(k); else hiddenKinds.add(k);
+  applyState();
+}
+function jumpTo(n) {
+  (FRAMES[n].callers || []).forEach(c => collapsed.delete(c));
+  if (currentView === "short" && !SHORT_PATH.includes(n)) currentView = "full";
+  if (hiddenKinds.has(FRAMES[n].kind)) hiddenKinds.delete(FRAMES[n].kind);
+  open.clear();
+  open.add(n);
+  applyState();
+  const row = document.querySelector(`.row[data-n="${n}"]`);
+  if (row) row.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// ── jump button binding ───────────────────────────────────────
+if (TRACE.jumpTarget && typeof TRACE.jumpTarget.n === "number") {
+  document.getElementById("jump-btn").addEventListener("click", () => jumpTo(TRACE.jumpTarget.n));
+}
+
+// ── bootstrap ─────────────────────────────────────────────────
+renderWatchPanel();
+renderFilterChips();
+if (SHORT_PATH.length) document.getElementById("view-toggle").classList.remove("hidden");
+applyState();
+</script>
+
+</body>
+</html>
