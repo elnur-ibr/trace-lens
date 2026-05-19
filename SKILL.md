@@ -197,6 +197,72 @@ Set `"convergesTo": <n>` on each leaf frame whose execution path ends by enterin
 
 Typical pattern: trace several distinct entry paths down to a shared handler frame, give that handler one canonical execution chain, then `convergesTo` from each *other* path's leaf back into the handler. The bottom-up view then renders the handler with all three paths fanning out below it.
 
+### Path divergence — same code, different execution paths
+
+A single trace usually models one execution. But many bugs only appear under specific data — same code, but on test all the JOINs match and on prod one of them misses; same code, but with a cached value vs a cold one; same code, but the user has KYC complete vs incomplete. Today this gets explained in prose (frame descriptions saying "on prod this returns empty"). Path-divergence makes it first-class: declare two (or more) named paths, mark which frames belong to which, and let the reader flip between them.
+
+**Top-level config:**
+
+```js
+window.STACK_TRACE = {
+  ...,
+  "paths": [
+    { "id": "test", "label": "Test env (all JOINs match)",            "color": "#5fbfa5" },
+    { "id": "prod", "label": "Prod (affected player, currency miss)", "color": "#e57373" }
+  ],
+  ...
+}
+```
+
+Each path needs a unique `id`; `label` is the chip text; `color` paints the path stripe at the left edge of every frame on that path and the toggle button in the control bar.
+
+**Per-frame:**
+
+```js
+{
+  "n": 5,
+  "fn": "Guard C — $user_data not empty",
+  // pathIds: which paths this frame appears on. OMITTED = on every path.
+  "pathIds": ["test", "prod"],
+
+  // pathOutcomes: keyed by path id, describes what happened for each path
+  // at this same frame. Renders as a "Per-path outcomes" callout in the
+  // detail pane, with one color-coded pill per path.
+  "pathOutcomes": {
+    "test": "$user_data populated → guard passes → continue to Write #2",
+    "prod": "$user_data empty → return false → override aborts, Write #1 zeros leak"
+  }
+}
+```
+
+`pathIds` is optional. Frames with no `pathIds` are treated as "on every path" — they're the shared prefix/suffix. Frames with explicit `pathIds: ["test"]` only render when the user has selected that path (or the "All" view). This is how you model the actual divergence: shared frames lead up to the split point, then per-path-only frames take over.
+
+**Renderer behavior:**
+
+- The control bar gets a new `Path` segmented toggle: `All | <path-1> | <path-2> | ...`. Default is `All`.
+- Each row gets a coloured stripe at its left edge — one colour per path it's on. Frames on multiple paths show the colour of the lowest-listed path (visual cue: shared frames pick up the dominant colour; per-path frames are unambiguously their own colour).
+- In `All` view, every frame renders. The detail pane includes the "Per-path outcomes" block listing what happened on each path.
+- Selecting a specific path hides frames whose `pathIds` doesn't include it. The remaining frames still show their `pathOutcomes` callout, with the inactive paths greyed in `applyState`.
+
+**When to use it:**
+
+| Scenario | path A | path B |
+|----------|--------|--------|
+| Bug investigation: "test passes, prod fails" | `test` | `prod` |
+| Refactor diff: "before vs after" | `before` | `after` |
+| Race condition: "fast path vs slow path" | `fast` | `slow` |
+| Feature flag: "flag on vs flag off" | `flag-on` | `flag-off` |
+| Cache: "cold vs warm" | `cold` | `warm` |
+| Auth states: "guest, user, admin" | `guest` | `user`, `admin` |
+
+**When NOT to use it:**
+
+- A flow that only has one path. `pathIds` and `pathOutcomes` are overhead with no payoff.
+- The two paths share less than ~50% of the frames. At that point they're two different traces — give each its own folder and link them in the subtitle.
+- More than ~4 paths. The toggle bar and the per-path callouts get noisy. Split.
+
+**Worked example.** See [`TraceLens/2026-05-19-deposit_override_layer/`](../../../laragon/www/BT/TraceLens/2026-05-19-deposit_override_layer/) (path-divergence variant of `load_payment_details()`). The shared prefix is frames #0–#4 (entry through the 5-JOIN SQL). At frame #5 (Guard C), the test path passes and the prod path returns false. Frames #6–#7 (default-backfill, Write #2) are tagged `pathIds: ["test"]` — they only render on the test path. A synthetic prod-exit frame (`pathIds: ["prod"]`) sits in their place to show that the prod path leaves with Write #1's zeros intact.
+
 ### JSON authoring rules
 
 - **Newlines inside string values must be `\n`.** JSON doesn't allow raw newlines in strings. Multi-line code/desc/p strings need explicit `\n`.
