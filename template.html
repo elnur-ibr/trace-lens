@@ -155,7 +155,7 @@
   .num { color: var(--muted); font-size: 11px; display: flex; align-items: center; padding: 0 6px 0 4px; }
   .fn-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 4px; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-  .dot.endpoint { background: var(--accent); }
+  .dot.entry    { background: var(--accent); }
   .dot.good     { background: var(--good); }
   .dot.bug      { background: var(--bad); }
   .dot.override { background: var(--override-c); }
@@ -212,7 +212,7 @@
     font-weight: 700; color: var(--muted); font-family: var(--font);
     align-self: center; margin-right: 10px; white-space: nowrap;
   }
-  .tag.endpoint { color: var(--accent); }
+  .tag.entry    { color: var(--accent); }
   .tag.good     { color: var(--good); }
   .tag.bug      { color: var(--bad); }
   .tag.override { color: var(--override-c); }
@@ -336,7 +336,7 @@
   }
   .chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .chip .chip-count { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 2px; }
-  .chip.endpoint { color: var(--accent); }
+  .chip.entry    { color: var(--accent); }
   .chip.good     { color: var(--good); }
   .chip.bug      { color: var(--bad); }
   .chip.override { color: var(--override-c); }
@@ -413,7 +413,7 @@
     {
       "n": 0,
       "fn": "entry_point()",
-      "kind": "endpoint",
+      "kind": "entry",
       "tag": "ENTRY",
       "file": "src/path/file.ext:1",
       "href": "src/path/file.ext#L1",

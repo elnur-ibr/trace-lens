@@ -38,7 +38,7 @@ const SPECIAL_GLYPHS = {
 // Kinds that have a built-in color + filter chip. Custom kinds beyond
 // these can be declared in TRACE.kinds (see "Custom kinds" in SKILL.md);
 // anything else renders neutral grey and gets no chip.
-const BUILTIN_COLORED_KINDS = new Set(["endpoint", "bug", "branch", "data", "override"]);
+const BUILTIN_COLORED_KINDS = new Set(["entry", "bug", "branch", "data", "override"]);
 
 // ── load trace data ───────────────────────────────────────────
 function showError(msg) {

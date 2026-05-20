@@ -122,7 +122,7 @@ The wrapper is JavaScript so the data file can be loaded via `<script src>` on `
 {
   "n":       0,                          // unique frame id. Conventionally 0-based and sequential, but the renderer indexes frames by `n` via a lookup map, so you can insert new frames later with any unused value (e.g. expanding an existing trace and using n=26+ instead of renumbering the whole array).
   "fn":      "function_name()",          // label shown in the row
-  "kind":    "endpoint",                 // see Tag taxonomy
+  "kind":    "entry",                    // see Tag taxonomy
   "tag":     "ENTRY",                    // UPPERCASE pill (~2-3 words)
   "file":    "path/to/file.ext:NNN",     // human-readable location (definition site of this frame)
   "href":    "path/to/file.ext#LNNN",    // clickable link (VS Code/GitHub style) — copied by ⎘ button
@@ -293,7 +293,7 @@ Built-in kinds are deliberately narrow — they cover the universal semantic cat
 
 | kind       | Color  | Use for                                       | Example tags                                    |
 |------------|--------|-----------------------------------------------|-------------------------------------------------|
-| `endpoint` | amber  | Entry/exit/target of the system               | `ENTRY`, `EXIT`, `ROUTE`, `ASYNC ENTRY`, `TARGET` |
+| `entry`    | amber  | Entry / exit / target of the system           | `ENTRY`, `EXIT`, `ROUTE`, `ASYNC ENTRY`, `TARGET` |
 | `bug`      | red    | Identified bug origin                         | `BUG`, `BUG · WRONG TABLE`, `WRITE #1`           |
 | `override` | blue   | Guard / override layer / wrapper logic        | `OVERRIDE LAYER`, `GUARD A`, `GUARD B`           |
 | `data`     | purple | Data-dependent step (DB/query/external state) | `5-JOIN SQL`, `ROOT CAUSE`, `LOOKUP`, `CACHE`    |
@@ -343,7 +343,7 @@ If the user has NOT supplied a kind set and a built-in genuinely doesn't fit, th
 
 - **One trace, ≤ 3 custom kinds.** Three new categories is already a lot to read. If you feel pulled toward a fourth, you're probably over-fitting; collapse two of them or fall back to the neutral default.
 - **Concrete, codebase-grounded names.** `io`, `validation`, `cache`, `audit` — not `important-step`, `notable`, `interesting`, `flow-element`. The name should answer "what semantic category is this?" not "is this worth looking at?"
-- **No synonyms of built-ins.** Don't create `entry` (use `endpoint`), `decision` (use `branch`), `error` (use `bug`), `wrapper` (use `override`), `db` (use `data`).
+- **No synonyms of built-ins.** Don't create `endpoint` / `start` / `entrypoint` (use `entry`), `decision` (use `branch`), `error` (use `bug`), `wrapper` (use `override`), `db` (use `data`).
 - **No filler categories.** Resist the urge to add a kind for "pass-through" or "boilerplate" — that's what the neutral default is for.
 - **Declare them.** If you do introduce a kind, write it into `TRACE.kinds` with a colour so it gets a chip and visual signal. An undeclared custom kind that you only set on one frame is wasted vocabulary.
 
@@ -614,10 +614,10 @@ Anywhere execution crosses a queue, job, message bus, scheduled task, webhook, s
 - Cross-link in the `desc`: "On failure / completion / event X, this enqueues a job picked up by #N."
 
 **On the consumer side** (the frame the queue worker dispatches into):
-- Set `kind: "endpoint"` — this is a true entry point.
+- Set `kind: "entry"` — this is a true entry point.
 - Tag it as `ASYNC ENTRY` / `RETRY` / `WORKER` / `CRON` / whatever fits.
 - Add `{"name": "async", "title": "executes on the queue worker / scheduler / consumer, not in the original request"}`.
-- If the framework worker itself is the immediate caller (Laravel Queue, Sidekiq, Celery worker, Kafka consumer, cron daemon), parent it from a separate `⋯` framework-boundary endpoint frame (see "Known frameworks" above).
+- If the framework worker itself is the immediate caller (Laravel Queue, Sidekiq, Celery worker, Kafka consumer, cron daemon), parent it from a separate `⋯` framework-boundary entry frame (see "Known frameworks" above).
 - In bottom-up direction, the consumer often funnels back into a shared handler — express that with `convergesTo: <handler_n>` so it renders as an additional caller-tree child of the handler.
 
 Examples that count as async boundaries:
