@@ -61,7 +61,7 @@ window.STACK_TRACE = {
   "watch":         [],
   "shortPath":     [],
   "frames": [
-    { "n": 0, "fn": "entry()", "kind": "endpoint", "tag": "ENTRY",
+    { "n": 0, "fn": "entry()", "kind": "entry", "tag": "ENTRY",
       "file": "src/foo.ts:1",
       "href": "src/foo.ts#L1",
       "callers": [],

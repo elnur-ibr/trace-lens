@@ -163,6 +163,89 @@ h1 { font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 6px; 
    doesn't flicker back to text/pointer when the mouse leaves the bar */
 body.col-resizing,
 body.col-resizing * { cursor: col-resize !important; user-select: none; }
+
+/* ── Path divergence ──────────────────────────────────────────
+   Coloured stripe at the left edge of each row, marking which
+   path(s) the frame belongs to. The per-path colour is injected
+   at runtime from TRACE.paths in debug-trace.js. */
+.row { position: relative; }
+.row::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  background: transparent;
+  pointer-events: none;
+}
+
+.path-toggle {
+  display: inline-flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px;
+}
+.path-toggle.hidden { display: none; }
+.path-toggle button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 12px;
+  padding: 3px 12px;
+  border-radius: 2px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.path-toggle button .path-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+}
+.path-toggle button.active {
+  background: var(--surface-2);
+  color: var(--accent);
+  font-weight: 700;
+}
+.path-toggle button:hover:not(.active) { color: var(--text); }
+
+.path-outcomes-block {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 4px 4px 0;
+}
+.path-outcomes-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.path-outcome-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 3px 0;
+}
+.path-outcome-row .path-pill {
+  font-family: var(--font);
+  font-weight: 700;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 7px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.path-outcome-row .path-outcome-text { color: var(--text-dim); }
+
 .row:last-of-type { border-bottom: none; }
 .row:hover { background: var(--surface-2); }
 .row.detail-open { background: var(--surface-2); }
@@ -194,7 +277,7 @@ body.col-resizing * { cursor: col-resize !important; user-select: none; }
 .num { color: var(--muted); font-size: 11px; display: flex; align-items: center; padding: 0 6px 0 4px; }
 .fn-wrap { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 4px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
-.dot.endpoint { background: var(--accent); }
+.dot.entry { background: var(--accent); }
 .dot.bug      { background: var(--bad); }
 .dot.override { background: var(--override-c); }
 .dot.data     { background: var(--data); }
@@ -273,7 +356,7 @@ body.col-resizing * { cursor: col-resize !important; user-select: none; }
   font-weight: 700; color: var(--muted); font-family: var(--font);
   align-self: center; margin-right: 10px; white-space: nowrap;
 }
-.tag.endpoint { color: var(--accent); }
+.tag.entry { color: var(--accent); }
 .tag.bug      { color: var(--bad); }
 .tag.override { color: var(--override-c); }
 .tag.data     { color: var(--data); }
@@ -396,7 +479,7 @@ pre {
 }
 .chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .chip .chip-count { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-left: 2px; }
-.chip.endpoint { color: var(--accent); }
+.chip.entry { color: var(--accent); }
 .chip.bug      { color: var(--bad); }
 .chip.override { color: var(--override-c); }
 .chip.data     { color: var(--data); }

@@ -38,7 +38,7 @@ const SPECIAL_GLYPHS = {
 // Kinds that have a built-in color + filter chip. Custom kinds beyond
 // these can be declared in TRACE.kinds (see "Custom kinds" in SKILL.md);
 // anything else renders neutral grey and gets no chip.
-const BUILTIN_COLORED_KINDS = new Set(["endpoint", "bug", "branch", "data", "override"]);
+const BUILTIN_COLORED_KINDS = new Set(["entry", "bug", "branch", "data", "override"]);
 
 // ── load trace data ───────────────────────────────────────────
 function showError(msg) {
@@ -141,6 +141,36 @@ const COLORED_KINDS = new Set([...BUILTIN_COLORED_KINDS, ...Object.keys(CUSTOM_K
   const style = document.createElement("style");
   style.textContent = css.join("\n");
   document.head.appendChild(style);
+})();
+
+// Path-divergence config (see "Path divergence" in SKILL.md). Lets a
+// trace model TWO or more execution paths over the same code (test vs
+// prod, happy vs bug, cached vs cold). Frames not on the selected path
+// are hidden; frames carrying `pathOutcomes[pathId]` render a per-path
+// callout in the detail pane describing what happened on each path.
+const PATHS = Array.isArray(TRACE.paths) ? TRACE.paths.filter(p => p && p.id) : [];
+const PATH_BY_ID = {};
+PATHS.forEach(p => { PATH_BY_ID[p.id] = p; });
+const ALL_PATH_IDS = PATHS.map(p => p.id);
+function framePathIds(f) {
+  return (Array.isArray(f.pathIds) && f.pathIds.length) ? f.pathIds : ALL_PATH_IDS;
+}
+(function injectPathStyles() {
+  if (!PATHS.length) return;
+  const css = [];
+  PATHS.forEach(p => {
+    if (!p.color) return;
+    const safeId = String(p.id).replace(/"/g, "");
+    css.push(`.path-toggle button[data-path="${safeId}"] { color: ${p.color}; border-color: ${p.color}; }`);
+    css.push(`.path-toggle button[data-path="${safeId}"].active { background: ${p.color}22; color: ${p.color}; }`);
+    css.push(`.path-outcome-row[data-path="${safeId}"] .path-pill { color: ${p.color}; border-color: ${p.color}; }`);
+    css.push(`.row[data-paths~="${safeId}"]::before { background: ${p.color}; }`);
+  });
+  if (css.length) {
+    const style = document.createElement("style");
+    style.textContent = css.join("\n");
+    document.head.appendChild(style);
+  }
 })();
 
 // header
@@ -299,6 +329,7 @@ RENDER_ORDER.forEach(f => {
   row.dataset.n    = f.n;
   row.dataset.kind = f.kind || "";
   if (hasSpecial(f, "conditional")) row.dataset.conditional = "true";
+  if (PATHS.length) row.dataset.paths = framePathIds(f).join(" ");
   const ideRefDef = (f.href || "").replace(/#L(\d+)/, ":$1");
   // call-site: explicit calledFromHref if given; else fall back to immediate parent's href
   let callHref = f.calledFromHref || "";
@@ -360,6 +391,27 @@ RENDER_ORDER.forEach(f => {
        </div>`
     : "";
 
+  // Per-path outcomes block — shows what happened on each path for
+  // this same frame (test vs prod, happy vs bug, etc.). Only renders
+  // when the trace declares paths AND this frame has pathOutcomes.
+  let pathOutcomesHtml = "";
+  if (PATHS.length && f.pathOutcomes && typeof f.pathOutcomes === "object") {
+    const rows = PATHS.map(p => {
+      const outcome = f.pathOutcomes[p.id];
+      if (outcome === undefined || outcome === null || outcome === "") return "";
+      return `<div class="path-outcome-row" data-path="${p.id}">
+        <span class="path-pill">${p.label || p.id}</span>
+        <span class="path-outcome-text">${outcome}</span>
+      </div>`;
+    }).filter(Boolean).join("");
+    if (rows) {
+      pathOutcomesHtml = `<div class="path-outcomes-block">
+        <div class="path-outcomes-title">Per-path outcomes</div>
+        ${rows}
+      </div>`;
+    }
+  }
+
   const detail = document.createElement("div");
   detail.className = "detail hidden";
   detail.dataset.n = f.n;
@@ -368,6 +420,7 @@ RENDER_ORDER.forEach(f => {
       <div class="called-by">called by: ${trail}</div>
       ${convergeNote}
       ${changesHtml}
+      ${pathOutcomesHtml}
       <p>${f.desc || ""}</p>
       ${f.extra || ""}
       <div class="grid">
@@ -440,12 +493,21 @@ const collapsed   = new Set();
 const open        = new Set();
 const hiddenKinds = new Set();
 let currentView   = "full";
+// Path filter: "__all__" shows every path's frames (default).
+// Selecting a path id hides frames whose pathIds don't include it.
+let currentPath   = "__all__";
 
 function inCurrentView(n) {
   if (currentView === "short" && !SHORT_PATH.includes(n)) return false;
   // In bottom-up, only frames reachable from the caller-tree root render.
   if (DIRECTION === "bottom-up" && !ctReachable.has(n))   return false;
   return true;
+}
+function inCurrentPath(n) {
+  if (!PATHS.length || currentPath === "__all__") return true;
+  const f = FRAMES_BY_N[n];
+  if (!f) return false;
+  return framePathIds(f).includes(currentPath);
 }
 function isHiddenByAncestor(n) {
   const chain = (DIRECTION === "bottom-up")
@@ -460,6 +522,7 @@ function applyState() {
     const kind = row.dataset.kind;
     let hidden = false;
     if (!inCurrentView(n))                                 hidden = true;
+    if (!inCurrentPath(n))                                 hidden = true;
     if (isHiddenByAncestor(n))                             hidden = true;
     if (currentView === "full" && hiddenKinds.has(kind))   hidden = true;
     row.classList.toggle("hidden", hidden);
@@ -471,6 +534,7 @@ function applyState() {
     const kind  = FRAMES_BY_N[n].kind;
     let hidden  = !open.has(n);
     if (!inCurrentView(n))                                 hidden = true;
+    if (!inCurrentPath(n))                                 hidden = true;
     if (isHiddenByAncestor(n))                             hidden = true;
     if (currentView === "full" && hiddenKinds.has(kind))   hidden = true;
     d.classList.toggle("hidden", hidden);
@@ -479,10 +543,39 @@ function applyState() {
   document.querySelectorAll("#view-toggle button").forEach(b => {
     b.classList.toggle("active", b.dataset.view === currentView);
   });
+  document.querySelectorAll("#path-toggle button").forEach(b => {
+    b.classList.toggle("active", b.dataset.path === currentPath);
+  });
   document.querySelectorAll(".chip").forEach(c => {
     c.classList.toggle("off", hiddenKinds.has(c.dataset.kind));
   });
 }
+
+function setPath(id) { currentPath = id; applyState(); }
+
+// Build the path-toggle control inside the ctrl bar
+(function renderPathToggle() {
+  if (!PATHS.length) return;
+  const ctrl = document.querySelector(".ctrl");
+  if (!ctrl) return;
+  const divider = document.createElement("span");
+  divider.className = "divider";
+  const label = document.createElement("strong");
+  label.textContent = "Path";
+  const toggle = document.createElement("div");
+  toggle.className = "path-toggle";
+  toggle.id = "path-toggle";
+  toggle.innerHTML = [
+    `<button data-path="__all__" class="active" onclick="setPath('__all__')">All</button>`,
+    ...PATHS.map(p => {
+      const lbl = (p.label || p.id).replace(/"/g, "&quot;");
+      return `<button data-path="${p.id}" onclick="setPath('${p.id}')"><span class="path-dot"></span>${lbl}</button>`;
+    })
+  ].join("");
+  ctrl.appendChild(divider);
+  ctrl.appendChild(label);
+  ctrl.appendChild(toggle);
+})();
 
 // ── events ────────────────────────────────────────────────────
 document.querySelectorAll(".chev").forEach(c => {
